@@ -1,6 +1,7 @@
 import soundfile as sf
 import numpy as np
 import itertools
+import random
 
 
 class Waveset(list):
@@ -53,6 +54,12 @@ class Waveset(list):
         weight_y = 1 - weight_x
         return [weight_x * x + weight_y * y for x, y in zip(self, ws)]
 
+    def scale(self, fac):
+        return type(self)(map(lambda x: x * fac, self))
+
+    def reverse(self):
+        return type(self)(reversed(self))
+
 
 class Wavesets(list):
     def __init__(self, iterable, first, last, sr):
@@ -60,6 +67,9 @@ class Wavesets(list):
         self.first = first
         self.last = last
         list.__init__(self, iterable)
+
+    def __getitem__(self, idx):
+        return self.halfcopy(list.__getitem__(self, idx))
 
     @staticmethod
     def wav_to_list(name):
@@ -137,11 +147,25 @@ class Wavesets(list):
         first, wavesets, last = Wavesets.get_wavesets(wave, cross, ncrossings)
         return cls(wavesets, first, last, sr)
 
+    @property
+    def length(self):
+        return sum(len(ws) for ws in self) + len(
+                self.first) + len(self.last)
+
+    @property
+    def duration(self):
+        return self.length / self.sr
+
+    def cut_last(self):
+        return type(self)(self[:-1], self.first, self[-1], self.sr)
+
     def to_wav(self, name, norm=1):
         wave = [i for sub in self for i in sub]
+        wave = self.first + wave + self.last
         wave = list(map(lambda x: x * norm, wave))
         with sf.SoundFile(name, 'x', self.sr, 1, 'PCM_24') as f:
             f.write(wave)
+        return name
 
     def halfcopy(self, wavesets):
         return type(self)(wavesets, self.first, self.last, self.sr)
@@ -149,10 +173,19 @@ class Wavesets(list):
     def copy(self):
         return self.halfcopy(self[:])
 
-    def jump_wavesets(self):
+    def shuffle(self):
+        result = []
+        firsts = itertools.islice(self, 0, None, 2)
+        seconds = itertools.islice(self, 1, None, 2)
+        for w1, w2 in zip(firsts, seconds):
+            result.append(w2)
+            result.append(w1)
+        return self.halfcopy(result)
+
+    def sort_by_maxjump(self):
         return self.halfcopy(sorted(self, key=lambda ws: ws.max_jump))
 
-    def similiar_wavesets(self):
+    def sort_by_similarity(self):
         ws = self.copy()
         last = ws[0]
         ws.remove(last)
@@ -163,32 +196,23 @@ class Wavesets(list):
             result.append(last)
         return self.halfcopy(result)
 
-    def shuffle_wavesets(self):
-        result = []
-        firsts = itertools.islice(self, 0, None, 2)
-        seconds = itertools.islice(self, 1, None, 2)
-        for w1, w2 in zip(firsts, seconds):
-            result.append(w2)
-            result.append(w1)
-        return self.halfcopy(result)
-
-    def maxavg_wavesets(self):
+    def sort_by_maxavg(self):
         def maxavg(x): return (x.summax + x.absmax) * 0.5
         return self.halfcopy(sorted(self, key=maxavg))
 
-    def most_wavesets(self):
+    def sort_by_most(self):
         return self.halfcopy(sorted(self, key=lambda ws: ws.most))
 
-    def max_wavesets(self):
+    def sort_by_max(self):
         return self.halfcopy(sorted(self, key=lambda ws: ws.absmax))
 
-    def avg_wavesets(self):
+    def sort_by_avg(self):
         return self.halfcopy(sorted(self, key=lambda ws: ws.summax))
 
-    def harmonize_wavesets(self, *factor):
+    def harmonize(self, *factor):
         return self.halfcopy(map(lambda ws: ws.harmonize(*factor), self))
 
-    def smooth_wavesets(self, lens_func):
+    def smooth(self, lens_func):
         def stretches(ws, lens):
             return [ws.stretch(l) for l in lens]
         result = []
@@ -203,4 +227,51 @@ class Wavesets(list):
                 trans.append(t)
             result = result + trans
         result.append(self[-1])
+        return self.halfcopy(result)
+
+    def stretch(self, fac):
+        return self.halfcopy(ws.stretch(fac) for ws in self[:])
+
+    def repeat(self, am, scale_range=0):
+        result = []
+        for ws in self[:]:
+            for i in range(am):
+                scaled = ws.scale(random.uniform(1-scale_range, 1))
+                result.append(scaled)
+        return self.halfcopy(result)
+
+    def dynamic_repeat(self, start_repeat, end_repeat, scale_range=0):
+        repeats = map(int, Wavesets.linspace(start_repeat, end_repeat,
+                                             len(self)))
+        result = []
+        for ws, am in zip(self[:], repeats):
+            for i in range(am):
+                scaled = ws.scale(random.uniform(1-scale_range, 1))
+                result.append(scaled)
+        return self.halfcopy(result)
+
+    def reversed_sets(self):
+        return self.halfcopy(ws.reverse() for ws in self[:])
+
+    def distort(self, fac):
+        return self.halfcopy(ws.scale(fac) for ws in self[:])
+
+    def interleave(self, other):
+        assert(self.sr == other.sr)
+        result = []
+        for ws0, ws1 in zip(self[:], other[:]):
+            result.append(ws0)
+            result.append(ws1)
+        return self.halfcopy(result)
+
+    def scale_randomly(self, range):
+        return self.halfcopy(ws.scale(random.uniform(1-range, 1))
+                             for ws in self[:])
+
+    def dynamic_scale(self, startscale, endscale):
+        factors = Wavesets.linspace(
+                startscale, endscale, len(self))
+        result = []
+        for ws, fac in zip(self[:], factors):
+            result.append(ws.scale(fac))
         return self.halfcopy(result)
